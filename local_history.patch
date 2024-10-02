@@ -1,0 +1,17 @@
+Index: movie_db/api/urls.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/movie_db/api/urls.py b/movie_db/api/urls.py
+--- a/movie_db/api/urls.py	
++++ b/movie_db/api/urls.py	(date 1727897753224)
+@@ -25,7 +25,7 @@
+     path('api/movies/<str:movie_id>/', MovieUpdateView.as_view(), name='movie-update'),
+     path('api/movies/<str:movie_id>/', MovieDeleteView.as_view(), name='movie-delete'),
+     path('api/genres/', GenreListView.as_view(), name='genre-list'),
+-    path('/user/', UserRegistrationView.as_view(), name='user-registration'),
++    path('api/user/', UserRegistrationView.as_view(), name='user-registration'),
+ 
+ 
+ ]
