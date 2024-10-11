@@ -1,9 +1,12 @@
+from django.contrib.auth import authenticate
 from rest_framework import viewsets, generics, status
-from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, AllowAny, IsAuthenticated
 from rest_framework.views import APIView
+from rest_framework.response import Response
+
 
 from .models import Person, Movie, User
-from .serializers import PersonSerializer, MovieSerializer, UserSerializer, UserRegistrationSerializer
+from .serializers import PersonSerializer, MovieSerializer, LoginSerializer, RegisterSerializer
 
 
 class PersonViewSet(viewsets.ModelViewSet):
@@ -20,11 +23,30 @@ class MovieViewSet(viewsets.ModelViewSet):
 class MovieCreateView(generics.CreateAPIView):
     queryset = Movie.objects.all()
     serializer_class = MovieSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]  # Zajistí, že pouze přihlášení uživatelé mohou vytvářet filmy
 
-class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
-    permission_classes = [IsAdminUser]
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+
+        # Ověření dat
+        if serializer.is_valid():
+            movie = serializer.save()  # Uložení filmu
+
+            # Příprava dat pro odpověď
+            movie_data = {
+                "_id": str(movie.id),
+                "name": movie.name,
+                "year": movie.year,
+                "directorID": str(movie.director.id),
+                "actorIDs": [str(actor.id) for actor in movie.actors.all()],
+                "genres": movie.genres,
+                "isAvailable": movie.isAvailable,
+                "dateAdded": movie.dateAdded.isoformat(),  # ISO formát pro datum
+                "__v": movie.__v,  # Pokud nemáte skutečné pole __v, můžete ponechat 0 nebo ho odstranit
+            }
+            return Response(movie_data, status=status.HTTP_201_CREATED)  # Vraťte data nově vytvořeného filmu
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)  # Vraťte chyby, pokud jsou data neplatná
 
 
 from rest_framework.authtoken.views import ObtainAuthToken
@@ -83,6 +105,7 @@ class ActorListView(APIView):
         serializer = PersonSerializer(actors, many=True)
         return Response(serializer.data)
 
+
 class PersonDetailView(APIView):
     # GET požadavek pro ziskani detailu cloveka
     def get(self, request, pk):
@@ -93,37 +116,46 @@ class PersonDetailView(APIView):
         except Person.DoesNotExist:
             return Response({"error": "Person not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    # PUT požadavek pro úpravu člověka
+
+    # PUT pro úpravu osoby
     def put(self, request, pk):
         try:
-            person = Person.objects.get(pk=pk)  # Najdi osobu podle ID
+            person = Person.objects.get(pk=pk)  # Najdeme osobu podle ID
             serializer = PersonSerializer(person, data=request.data)  # Předáme nová data do serializeru
 
-            if serializer.is_valid():  # Zkontroluj, zda jsou data validní
-                serializer.save()  # Ulož nová data
-                return Response(serializer.data)  # Vrať aktualizované data
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)  # Pokud není validní, vrať chybu
+            if serializer.is_valid():  # Zkontrolujeme, zda jsou data validní
+                serializer.save()  # Uložíme nová data
+                return Response(serializer.data)  # Vrátíme aktualizovaná data
+            return Response(serializer.errors,
+                            status=status.HTTP_400_BAD_REQUEST)  # Pokud validace selže, vrátíme chyby
         except Person.DoesNotExist:
-            return Response({"error": "Person not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Person not found."},
+                            status=status.HTTP_404_NOT_FOUND)  # Vrátíme chybu, pokud osoba neexistuje
 
     def delete(self, request, pk):
         try:
             person = Person.objects.get(pk=pk)
+
+            # Data o osobě před smazáním
             person_data = {
-                "_id": str(person.id),
+                "_id": str(person.id),  # Převedeme ID na řetězec
                 "name": person.name,
-                "birthDate": person.birthDate,
+                "birthDate": person.birthDate.isoformat(),  # ISO 8601 formát pro datum
                 "country": person.country,
                 "biography": person.biography,
                 "role": person.role,
-                "__v": person.__v,  # Zde můžeš přizpůsobit podle tvé implementace
+                "__v": 0  # Pokud nemáte skutečné pole __v, můžete ponechat 0 nebo ho odstranit
             }
-            person.delete()  # Odstranění osoby
-            return Response(person_data, status=status.HTTP_200_OK)  # Vrať odstraněná data
+
+            person.delete()  # Smazání osoby
+            return Response(person_data, status=status.HTTP_200_OK)  # Vrácení dat o smazané osobě
+
         except Person.DoesNotExist:
-            return Response({"error": "Person not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "The person has been deleted."}, status=status.HTTP_404_NOT_FOUND)
 
 
+
+# Movies views
 class MovieListView(APIView):
     def get(self, request):
         # Získání filtrů z query parametrů
@@ -213,7 +245,7 @@ class MovieUpdateView(APIView):
             movie.genres = data.get("genres", movie.genres)
 
             # Zpracování režiséra
-            director_id = data.get("directorID")
+            director_id = data.get("director")  # Použijte 'director' místo 'directorID'
             if director_id:
                 try:
                     movie.director = Person.objects.get(id=director_id)
@@ -221,7 +253,7 @@ class MovieUpdateView(APIView):
                     return Response({"detail": "Director not found."}, status=status.HTTP_404_NOT_FOUND)
 
             # Zpracování herců
-            actor_ids = data.get("actorIDs", [])
+            actor_ids = data.get("actors", [])  # Použijte 'actors' místo 'actorIDs'
             movie.actors.clear()  # Odstraní předchozí herce
             for actor_id in actor_ids:
                 try:
@@ -235,22 +267,19 @@ class MovieUpdateView(APIView):
 
             # Příprava odpovědi
             movie_data = {
-                "_id": str(movie.id),
+                "id": str(movie.id),  # Změněno na 'id'
                 "name": movie.name,
                 "year": movie.year,
-                "directorID": str(movie.director.id),
-                "actorIDs": [str(actor.id) for actor in movie.actors.all()],
+                "director": str(movie.director.id),  # Změněno na 'director'
+                "actors": [str(actor.id) for actor in movie.actors.all()],  # Změněno na 'actors'
                 "genres": movie.genres,
                 "isAvailable": movie.isAvailable,
                 "dateAdded": movie.dateAdded.isoformat(),
-                "__v": movie.__v,
             }
 
             return Response(movie_data, status=status.HTTP_200_OK)
         except Movie.DoesNotExist:
             return Response({"detail": "Movie not found."}, status=status.HTTP_404_NOT_FOUND)
-
-
 
 class MovieDeleteView(APIView):
     def delete(self, request, movie_id):
@@ -279,32 +308,70 @@ class MovieDeleteView(APIView):
 
         except Movie.DoesNotExist:
             return Response({"detail": "Movie not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-
-GENRES = [
-    "sci-fi",
-    "adventure",
-    "action",
-    "romantic",
-    "animated",
-    "comedy"
-]
-
+# Genre views
 class GenreListView(APIView):
     def get(self, request):
-        return Response(GENRES, status=status.HTTP_200_OK)
+        genres = [
+            "sci-fi",
+            "adventure",
+            "action",
+            "romantic",
+            "animated",
+            "comedy"
+        ]
+        return Response(genres, status=status.HTTP_200_OK)
 
 
-class UserRegistrationView(APIView):
-    def post(self, request):
-        serializer = UserSerializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
+
+# User views
+class RegisterView(generics.CreateAPIView):
+    permission_classes = [AllowAny]
+    serializer_class = RegisterSerializer
+
+class LoginView(generics.GenericAPIView):
+    permission_classes = [AllowAny]
+    serializer_class = LoginSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        password = serializer.validated_data['password']
+        user = authenticate(request, email=email, password=password)
+
+        if user is not None:
             return Response({
-                "email": user.email,
-                "isAdmin": user.is_admin,
-                "_id": str(user.id),
-                "__v": 0
-            }, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                '_id': user.id,
+                'email': user.email,
+                'isAdmin': user.is_admin,
+            })
+        return Response({'detail': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+class LogoutView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        # Získání tokenu
+        try:
+            # Tady můžete provést další operace, jako např. blacklist token
+            # V tomto příkladu jednoduše vracíme úspěšnou odpověď
+            return Response({"detail": "Uživatel odhlášen"}, status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CurrentUserView(generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response({
+            '_id': user.id,
+            'email': user.email,
+            'isAdmin': user.is_admin,
+        })

@@ -8,7 +8,7 @@ class UserManager(BaseUserManager):
         if not email:
             raise ValueError("Users must have an email address")
         user = self.model(email=self.normalize_email(email))
-        user.set_password(password)
+        user.set_password(password)  # Správně hashované heslo
         user.is_admin = is_admin
         user.save(using=self._db)
         return user
@@ -40,8 +40,8 @@ class Person(models.Model):
 class Movie(models.Model):
     name = models.CharField(max_length=200)
     year = models.IntegerField()
-    director = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='directed_movies')
-    actors = models.ManyToManyField(Person, related_name='acted_movies')
-    genres = models.JSONField()  # Seznam žánrů
+    director = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='directed_movies')  # Odkaz na režiséra
+    actors = models.ManyToManyField(Person, related_name='acted_movies')  # Odkaz na herce
     isAvailable = models.BooleanField(default=True)
+    genres = models.JSONField()  # Předpokládám, že toto je JSONField
     dateAdded = models.DateTimeField(auto_now_add=True)
